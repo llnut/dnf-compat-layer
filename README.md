@@ -31,17 +31,23 @@ Replaces several glibc functions through `LD_PRELOAD` to fix compatibility issue
 
 **shm_open / shm_unlink**
 
-Replaces embedded slashes in shared memory object names with underscores. Newer glibc versions reject names with slashes after the leading `/`.
+Replaces embedded slashes in shm object names with underscores.
 
 **stat family**
 
-Replaces `__xstat`, `__xstat64`, `__fxstat`, `__fxstat64`, `__lxstat`, `__lxstat64`. Calls the kernel directly through `int 0x80` syscalls instead of glibc wrappers.
+Replaces `__xstat`, `__xstat64`, `__fxstat`, `__fxstat64`, `__lxstat`, `__lxstat64`. Calls the kernel directly through `int 0x80` syscalls instead of glibc wrappers. Applies the same `/dev/shm/` rewrite, so a `stat` on `/dev/shm/a/b` resolves to `/dev/shm/a_b`.
 
-Applies the same slash-to-underscore rewrite to `/dev/shm/` paths. A `stat` on `/dev/shm/a/b` then resolves to `/dev/shm/a_b`.
+**path-IO family**
 
-**mkdir**
+Applies the same `/dev/shm/` rewrite to every other libc entry that can reach a shm file: `open`, `open64`, `openat`, `openat64`, `creat`, `creat64`, `__open_2`, `__open64_2`, `__openat_2`, `__openat64_2`, `access`, `eaccess`, `euidaccess`, `faccessat`, `unlink`, `unlinkat`, `truncate`, `truncate64`, `fopen`, `fopen64`, `opendir`, `statx`, `rename`, `renameat`, `renameat2`. Each resolved symbol is cached after the first call.
 
-Treats `EEXIST` as success. The call does not fail when the target directory already exists.
+**mkdir / mkdirat**
+
+A `/dev/shm/...` target reports success without making a real directory; the namespace is flattened, so nothing real lives under `/dev/shm`. Any other target treats `EEXIST` as success.
+
+**trace (optional)**
+
+Set `DNF_SHM_TRACE` to a writable file path to log shm-related calls for debugging. Off by default.
 
 
 ## Building

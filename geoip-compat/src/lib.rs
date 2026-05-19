@@ -2,7 +2,7 @@
 
 #![allow(private_interfaces)]
 
-use std::ffi::{c_char, c_int, CStr};
+use std::ffi::{CStr, c_char, c_int};
 use std::fs;
 use std::net::Ipv4Addr;
 
@@ -78,7 +78,10 @@ fn parse_db(data: Vec<u8>) -> Option<GeoIpDb> {
         return None;
     }
 
-    Some(GeoIpDb { data, segments: GEOIP_COUNTRY_BEGIN })
+    Some(GeoIpDb {
+        data,
+        segments: GEOIP_COUNTRY_BEGIN,
+    })
 }
 
 impl GeoIpDb {
@@ -268,7 +271,10 @@ mod tests {
 
     #[test]
     fn lookup_returns_none_on_empty_data() {
-        let db = GeoIpDb { data: vec![0u8; 1], segments: GEOIP_COUNTRY_BEGIN };
+        let db = GeoIpDb {
+            data: vec![0u8; 1],
+            segments: GEOIP_COUNTRY_BEGIN,
+        };
         assert!(db.lookup_country_id(0).is_none());
     }
 
@@ -277,9 +283,16 @@ mod tests {
         // Single-node trie: both branches resolve immediately.
         // Record value 0xFFFF01 in little-endian = GEOIP_COUNTRY_BEGIN + 1 = country index 1.
         let mut data = vec![0u8; 6];
-        data[0] = 0x01; data[1] = 0xFF; data[2] = 0xFF; // left branch
-        data[3] = 0x01; data[4] = 0xFF; data[5] = 0xFF; // right branch
-        let db = GeoIpDb { data, segments: GEOIP_COUNTRY_BEGIN };
+        data[0] = 0x01;
+        data[1] = 0xFF;
+        data[2] = 0xFF; // left branch
+        data[3] = 0x01;
+        data[4] = 0xFF;
+        data[5] = 0xFF; // right branch
+        let db = GeoIpDb {
+            data,
+            segments: GEOIP_COUNTRY_BEGIN,
+        };
         assert_eq!(db.lookup_country_id(0x00000000), Some(1));
         assert_eq!(db.lookup_country_id(0x80000000), Some(1));
     }
