@@ -1,5 +1,5 @@
 //! LD_PRELOAD test for the `/dev/shm/<a>/<b>` flattening. Builds the 32-bit
-//! x86 `cdylib`, preloads it into a matching C harness, and checks a nested
+//! x86 `cdylib`, preloads it into a matching C test program, and checks a nested
 //! path becomes one object. `#[ignore]` by default since it needs a 32-bit
 //! x86 toolchain. Run with:
 //!
@@ -87,7 +87,7 @@ fn build_cdylib(out_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-const HARNESS_C: &str = r#"
+const TEST_PROG_C: &str = r#"
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
@@ -127,14 +127,14 @@ int main(int argc, char **argv) {
 }
 "#;
 
-/// Compile the 32-bit x86 C harness. Prefers `zig cc`, which needs no
+/// Compile the 32-bit x86 C test program. Prefers `zig cc`, which needs no
 /// gcc-multilib, and falls back to `$CC -m32` then `cc -m32`.
-fn compile_harness(dir: &Path) -> Option<PathBuf> {
-    let src = dir.join("harness.c");
-    if fs::write(&src, HARNESS_C).is_err() {
+fn compile_test_prog(dir: &Path) -> Option<PathBuf> {
+    let src = dir.join("test_prog.c");
+    if fs::write(&src, TEST_PROG_C).is_err() {
         return None;
     }
-    let bin = dir.join("harness");
+    let bin = dir.join("test_prog");
 
     let zig_args: Vec<&OsStr> = vec![
         OsStr::new("cc"),
@@ -165,7 +165,7 @@ fn compile_harness(dir: &Path) -> Option<PathBuf> {
             return Some(bin.clone());
         }
         eprintln!(
-            "{prog} could not build the 32-bit x86 harness:\n{}",
+            "{prog} could not build the 32-bit x86 test_prog:\n{}",
             String::from_utf8_lossy(&out.stderr)
         );
     }
@@ -190,7 +190,7 @@ fn dev_shm_nested_path_is_flattened_under_preload() {
         Some(p) => p,
         None => skip!("could not build the {TARGET} cdylib in this environment"),
     };
-    let harness = match compile_harness(&tmp) {
+    let test_prog = match compile_test_prog(&tmp) {
         Some(p) => p,
         None => skip!("no working 32-bit x86 C toolchain (cc -m32)"),
     };
@@ -200,7 +200,7 @@ fn dev_shm_nested_path_is_flattened_under_preload() {
     let nested_dir = PathBuf::from(&prefix);
     let nested_file = PathBuf::from(format!("{prefix}/leaf"));
 
-    let status = Command::new(&harness)
+    let status = Command::new(&test_prog)
         .arg(&prefix)
         .env("LD_PRELOAD", &so)
         .status();
@@ -210,19 +210,20 @@ fn dev_shm_nested_path_is_flattened_under_preload() {
         let _ = fs::remove_file(format!("{prefix}_leaf"));
         let _ = fs::remove_file(&nested_file);
         let _ = fs::remove_dir(&nested_dir);
+        let _ = fs::remove_dir_all(&tmp);
     };
 
     let status = match status {
         Ok(s) => s,
         Err(e) => {
             cleanup();
-            skip!("cannot execute the 32-bit x86 harness ({e})");
+            skip!("cannot execute the 32-bit x86 test_prog ({e})");
         }
     };
 
     if !status.success() {
         cleanup();
-        panic!("harness exited with {status}; the flatten invariant is broken");
+        panic!("test_prog exited with {status}; the flatten invariant is broken");
     }
 
     let flattened_exists = flattened.exists();
@@ -230,9 +231,11 @@ fn dev_shm_nested_path_is_flattened_under_preload() {
     let nested_file_exists = nested_file.exists();
     cleanup();
 
+    // The unlink hook rewrites the trailing unlink in the test program to
+    // the flattened path, so the flattened object is absent after the run.
     assert!(
-        flattened_exists,
-        "expected flattened object {flattened:?} to exist"
+        !flattened_exists,
+        "expected flattened object {flattened:?} to be unlinked by the preload hook"
     );
     assert!(
         !nested_dir_exists,
