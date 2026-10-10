@@ -54,7 +54,7 @@ Set `DNF_SHM_TRACE` to a writable file path to log shm-related calls for debuggi
 
 **Prerequisites:**
 
-- [Rust](https://rustup.rs/) toolchain (stable channel)
+- [Rust](https://rustup.rs/) 1.99 or newer on the stable channel
 
 **Build commands:**
 

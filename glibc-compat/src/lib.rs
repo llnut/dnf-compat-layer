@@ -254,14 +254,17 @@ unsafe fn sanitize_dev_shm_path(
 const O_CREAT: c_int = 0o100;
 #[cfg(any(target_arch = "x86", test))]
 const O_TMPFILE_BIT: c_int = 0o20_000_000;
-#[cfg(test)]
+#[cfg(any(target_arch = "x86", test))]
 const O_DIRECTORY: c_int = 0o200_000;
+/// glibc defines `__O_TMPFILE` with `O_DIRECTORY` included.
+#[cfg(any(target_arch = "x86", test))]
+const O_TMPFILE: c_int = O_TMPFILE_BIT | O_DIRECTORY;
 
 /// Mirrors glibc `__OPEN_NEEDS_MODE`: `open` takes `mode` only when the
 /// flags create a file.
 #[cfg(any(target_arch = "x86", test))]
 fn open_needs_mode(flags: c_int) -> bool {
-    flags & O_CREAT != 0 || flags & O_TMPFILE_BIT == O_TMPFILE_BIT
+    flags & O_CREAT != 0 || flags & O_TMPFILE == O_TMPFILE
 }
 
 /// True for any non-empty name under `/dev/shm/`. `mkdir`/`mkdirat` use it
@@ -633,85 +636,43 @@ mod path_hooks {
         }
     }
 
-    // The open and creat family is variadic in C. With the 32-bit x86 cdecl
-    // ABI all arguments go on the stack, so a fixed `mode` parameter is
-    // safe: a 2-argument caller leaves `mode` unused and unforwarded, and
-    // glibc reads it only when `open_needs_mode`. Relies on the cdecl stack
-    // layout.
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
-        type Fn = unsafe extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
-        static REAL: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
-        let ptr = unsafe { resolve(&REAL, c"open".as_ptr()) };
-        if ptr.is_null() {
-            set_errno(ENOSYS);
-            return -1;
-        }
-        let real: Fn = unsafe { std::mem::transmute(ptr) };
-        let mut buf: PathBuf = MaybeUninit::uninit();
-        let p = unsafe { patch(path, &mut buf) };
-        let m = if open_needs_mode(flags) { mode } else { 0 };
-        unsafe { real(p, flags, m) }
+    /// Hook for the variadic open family. Parameters given to the macro come
+    /// before `path`. The hook reads `mode` only when `open_needs_mode` is true.
+    /// glibc applies the same rule, so the hook reads `mode` only where glibc
+    /// would.
+    macro_rules! open_hook {
+        ($name:ident, $sym:literal, ($($an:ident: $at:ty),*)) => {
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn $name(
+                $($an: $at,)*
+                path: *const c_char,
+                flags: c_int,
+                mut args: ...
+            ) -> c_int {
+                type Fn = unsafe extern "C" fn($($at,)* *const c_char, c_int, ...) -> c_int;
+                static REAL: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+                let ptr = unsafe { resolve(&REAL, $sym.as_ptr()) };
+                if ptr.is_null() {
+                    set_errno(ENOSYS);
+                    return -1;
+                }
+                let real: Fn = unsafe { std::mem::transmute(ptr) };
+                let mut buf: PathBuf = MaybeUninit::uninit();
+                let p = unsafe { patch(path, &mut buf) };
+                let mode: mode_t = if open_needs_mode(flags) {
+                    unsafe { args.next_arg::<mode_t>() }
+                } else {
+                    0
+                };
+                unsafe { real($($an,)* p, flags, mode) }
+            }
+        };
     }
 
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn open64(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
-        type Fn = unsafe extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
-        static REAL: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
-        let ptr = unsafe { resolve(&REAL, c"open64".as_ptr()) };
-        if ptr.is_null() {
-            set_errno(ENOSYS);
-            return -1;
-        }
-        let real: Fn = unsafe { std::mem::transmute(ptr) };
-        let mut buf: PathBuf = MaybeUninit::uninit();
-        let p = unsafe { patch(path, &mut buf) };
-        let m = if open_needs_mode(flags) { mode } else { 0 };
-        unsafe { real(p, flags, m) }
-    }
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn openat(
-        dirfd: c_int,
-        path: *const c_char,
-        flags: c_int,
-        mode: mode_t,
-    ) -> c_int {
-        type Fn = unsafe extern "C" fn(c_int, *const c_char, c_int, mode_t) -> c_int;
-        static REAL: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
-        let ptr = unsafe { resolve(&REAL, c"openat".as_ptr()) };
-        if ptr.is_null() {
-            set_errno(ENOSYS);
-            return -1;
-        }
-        let real: Fn = unsafe { std::mem::transmute(ptr) };
-        let mut buf: PathBuf = MaybeUninit::uninit();
-        let p = unsafe { patch(path, &mut buf) };
-        let m = if open_needs_mode(flags) { mode } else { 0 };
-        unsafe { real(dirfd, p, flags, m) }
-    }
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn openat64(
-        dirfd: c_int,
-        path: *const c_char,
-        flags: c_int,
-        mode: mode_t,
-    ) -> c_int {
-        type Fn = unsafe extern "C" fn(c_int, *const c_char, c_int, mode_t) -> c_int;
-        static REAL: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
-        let ptr = unsafe { resolve(&REAL, c"openat64".as_ptr()) };
-        if ptr.is_null() {
-            set_errno(ENOSYS);
-            return -1;
-        }
-        let real: Fn = unsafe { std::mem::transmute(ptr) };
-        let mut buf: PathBuf = MaybeUninit::uninit();
-        let p = unsafe { patch(path, &mut buf) };
-        let m = if open_needs_mode(flags) { mode } else { 0 };
-        unsafe { real(dirfd, p, flags, m) }
-    }
+    open_hook!(open, c"open", ());
+    open_hook!(open64, c"open64", ());
+    open_hook!(openat, c"openat", (dirfd: c_int));
+    open_hook!(openat64, c"openat64", (dirfd: c_int));
 
     /// Hook for path-first libc calls returning int.
     macro_rules! path_int_hook {
@@ -1102,12 +1063,17 @@ mod tests {
 
     #[test]
     fn open_tmpfile_needs_mode() {
-        assert!(open_needs_mode(O_TMPFILE_BIT | O_DIRECTORY));
+        assert!(open_needs_mode(O_TMPFILE));
     }
 
     #[test]
     fn open_directory_only_needs_no_mode() {
         assert!(!open_needs_mode(O_DIRECTORY));
+    }
+
+    #[test]
+    fn open_tmpfile_bit_without_directory_needs_no_mode() {
+        assert!(!open_needs_mode(O_TMPFILE_BIT));
     }
 
     #[test]

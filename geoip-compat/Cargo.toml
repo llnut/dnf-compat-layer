@@ -2,6 +2,7 @@
 name = "geoip-compat"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [lib]
 crate-type = ["cdylib"]
